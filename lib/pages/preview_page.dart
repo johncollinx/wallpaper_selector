@@ -1,32 +1,16 @@
-import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
-
-import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image/image.dart' as img;
 import 'package:win32/win32.dart';
+import 'package:ffi/ffi.dart';
 
 import '../models/wallpaper_model.dart';
 
-// ──────────────────────────────────────────────
-// Windows wallpaper constants
-const int SPI_SETDESKWALLPAPER = 20;
-const int SPIF_UPDATEINIFILE = 0x01;
-const int SPIF_SENDCHANGE = 0x02;
-
-// FFI typedefs for SystemParametersInfoW
-typedef SystemParametersInfoNative = Bool Function(
-    Uint32 uiAction, Uint32 uiParam, Pointer<Utf16> pvParam, Uint32 fWinIni);
-typedef SystemParametersInfoDart = bool Function(
-    int uiAction, int uiParam, Pointer<Utf16> pvParam, int fWinIni);
-
 class WallpaperPreviewPage extends StatefulWidget {
   final WallpaperModel wallpaper;
-
   const WallpaperPreviewPage({super.key, required this.wallpaper});
 
   @override
@@ -37,22 +21,10 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
   late List<WallpaperModel> wallpapers;
   late int selectedIndex;
 
-  late SystemParametersInfoDart _systemParametersInfo;
-
   @override
   void initState() {
     super.initState();
 
-    // Load FFI function from user32.dll
-    if (Platform.isWindows) {
-      final user32 = DynamicLibrary.open('user32.dll');
-      _systemParametersInfo = user32
-          .lookup<NativeFunction<SystemParametersInfoNative>>(
-              'SystemParametersInfoW')
-          .asFunction<SystemParametersInfoDart>();
-    }
-
-    // Sample wallpapers (replace with your actual data or pass through constructor)
     wallpapers = [
       WallpaperModel(
         id: 'w1',
@@ -88,8 +60,26 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
     if (selectedIndex == -1) selectedIndex = 0;
   }
 
-  // ──────────────────────────────────────────────
-  // Prepare wallpaper for Windows
+  // ✅ Uses win32 constants and API — no manual FFI definitions required
+  Future<void> _setWallpaperWindows(String imagePath) async {
+    final imagePathPtr = imagePath.toNativeUtf16();
+
+    final result = SystemParametersInfo(
+      SPI_SETDESKWALLPAPER,
+      0,
+      imagePathPtr,
+      SPIF_UPDATEINIFILE | SPIF_SENDWININICHANGE, // correct flags
+    );
+
+    malloc.free(imagePathPtr);
+
+    if (result == 0) {
+      final error = GetLastError();
+      throw Exception('Failed to set wallpaper (Error $error)');
+    }
+  }
+
+  // ✅ Prepare wallpaper by resizing to screen
   Future<String> _prepareWallpaper(String assetPath) async {
     if (!Platform.isWindows) {
       throw Exception('Wallpaper setting only supported on Windows.');
@@ -115,21 +105,6 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
     return file.path;
   }
 
-  // ──────────────────────────────────────────────
-  // Set wallpaper on Windows
-  Future<void> _setWallpaperWindows(String imagePath) async {
-    final ptr = imagePath.toNativeUtf16();
-    final result = _systemParametersInfo(
-        SPI_SETDESKWALLPAPER, 0, ptr, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
-    calloc.free(ptr);
-
-    if (!result) {
-      final errorCode = GetLastError();
-      throw Exception('Failed to set wallpaper (Error $errorCode)');
-    }
-  }
-
-  // ──────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     final selected = wallpapers[selectedIndex];
@@ -156,24 +131,31 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
         builder: (context, constraints) {
           final isCompact = constraints.maxWidth < 1000;
           return isCompact
-              ? Column(
-                  children: [
-                    Expanded(flex: 2, child: _buildWallpaperGrid()),
-                    Expanded(flex: 3, child: _buildDetailsPanel(selected)),
-                  ],
-                )
-              : Row(
-                  children: [
-                    Expanded(flex: 2, child: _buildWallpaperGrid()),
-                    Expanded(flex: 3, child: _buildDetailsPanel(selected)),
-                  ],
-                );
+              ? _buildVerticalLayout(selected)
+              : _buildHorizontalLayout(selected);
         },
       ),
     );
   }
 
-  // ──────────────────────────────────────────────
+  Widget _buildHorizontalLayout(WallpaperModel selected) {
+    return Row(
+      children: [
+        Expanded(flex: 2, child: _buildWallpaperGrid()),
+        Expanded(flex: 3, child: _buildDetailsPanel(selected)),
+      ],
+    );
+  }
+
+  Widget _buildVerticalLayout(WallpaperModel selected) {
+    return Column(
+      children: [
+        Expanded(flex: 2, child: _buildWallpaperGrid()),
+        Expanded(flex: 3, child: _buildDetailsPanel(selected)),
+      ],
+    );
+  }
+
   Widget _buildWallpaperGrid() {
     return Padding(
       padding: const EdgeInsets.all(20),
@@ -187,7 +169,6 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
         itemBuilder: (context, index) {
           final wall = wallpapers[index];
           final isSelected = selectedIndex == index;
-
           return GestureDetector(
             onTap: () => setState(() => selectedIndex = index),
             child: Stack(
@@ -213,7 +194,6 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
     );
   }
 
-  // ──────────────────────────────────────────────
   Widget _buildDetailsPanel(WallpaperModel selected) {
     return Container(
       padding: const EdgeInsets.all(30),
@@ -231,8 +211,8 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Preview',
-              style:
-                  GoogleFonts.poppins(fontSize: 22, fontWeight: FontWeight.w600)),
+              style: GoogleFonts.poppins(
+                  fontSize: 22, fontWeight: FontWeight.w600)),
           const SizedBox(height: 20),
           Center(
             child: Container(
@@ -250,8 +230,8 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
           ),
           const SizedBox(height: 25),
           Text(selected.category,
-              style:
-                  GoogleFonts.poppins(fontWeight: FontWeight.w600, fontSize: 20)),
+              style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600, fontSize: 20)),
           const SizedBox(height: 10),
           Wrap(spacing: 8, children: selected.tags.map(_buildTag).toList()),
           const SizedBox(height: 20),
@@ -263,53 +243,71 @@ class _WallpaperPreviewPageState extends State<WallpaperPreviewPage> {
             ),
           ),
           const SizedBox(height: 20),
-          ElevatedButton(
-            onPressed: () async {
-              try {
-                if (Platform.isWindows) {
-                  final path = await _prepareWallpaper(selected.image);
-                  await _setWallpaperWindows(path);
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Wallpaper applied successfully!'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
-                }
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('Failed to set wallpaper: $e'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFFB23F),
-              padding: const EdgeInsets.symmetric(vertical: 16),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12)),
-            ),
-            child: Text('Set Wallpaper',
-                style: GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => setState(() => selected.toggleFavourite()),
+                  icon: Icon(selected.isFavourite
+                      ? Icons.favorite
+                      : Icons.favorite_border),
+                  label: Text(selected.isFavourite
+                      ? 'Remove Favourite'
+                      : 'Save to Favourites'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () async {
+                    try {
+                      if (Platform.isWindows) {
+                        final path = await _prepareWallpaper(selected.image);
+                        await _setWallpaperWindows(path);
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content:
+                                  Text('Wallpaper applied successfully!'),
+                              backgroundColor: Colors.green,
+                            ),
+                          );
+                        }
+                      }
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('Failed to set wallpaper: $e'),
+                          backgroundColor: Colors.red,
+                        ),
+                      );
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFFFB23F),
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: Text('Set to Wallpaper',
+                      style:
+                          GoogleFonts.poppins(fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
 
-  // ──────────────────────────────────────────────
   Widget _buildTag(String text) {
     return Chip(
       label: Text(text,
           style: GoogleFonts.poppins(fontSize: 13, color: Colors.black87)),
       backgroundColor: const Color(0xFFEDEDED),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+      shape:
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
     );
   }
 }
