@@ -6,7 +6,6 @@ version: 1.0.0+1
 
 environment:
   sdk: ^3.0.0
-
 dependencies:
   flutter:
     sdk: flutter
@@ -16,6 +15,7 @@ dependencies:
   ffi: ^2.0.2
   win32: ^5.10.1
   flutter_svg: ^2.0.7
+
 
 
 
