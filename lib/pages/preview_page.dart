@@ -1,7 +1,15 @@
+import 'dart:ffi';
+import 'dart:io';
+import 'dart:math';
+import 'package:ffi/ffi.dart';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image/image.dart' as img;
+import 'package:win32/win32.dart';
+
 import '../models/wallpaper_model.dart';
 import '../providers/favourites_provider.dart';
 import '../providers/preview_drawer_provider.dart';
@@ -26,11 +34,98 @@ class _WallpaperStudioPageState extends ConsumerState<WallpaperStudioPage> {
   int selectedIndex = 0;
   String _selectedRoute = '/browse';
 
+  // 🧩 Load Windows API function
+  late final SystemParametersInfoDart _systemParametersInfo;
+
+  @override
+  void initState() {
+    super.initState();
+    if (Platform.isWindows) {
+      final user32 = DynamicLibrary.open('user32.dll');
+      _systemParametersInfo = user32
+          .lookupFunction<
+              Bool Function(Uint32, Uint32, Pointer<Utf16>, Uint32),
+              bool Function(int, int, Pointer<Utf16>, int)>('SystemParametersInfoW');
+    }
+  }
+
   void _onNavTap(String route) {
     if (_selectedRoute == route) return;
     setState(() => _selectedRoute = route);
     Navigator.pushNamed(context, route);
   }
+
+  // ---------------- Wallpaper Functions ----------------
+
+  Future<String> _prepareWallpaper(String assetPath) async {
+    final byteData = await rootBundle.load(assetPath);
+    final bytes = byteData.buffer.asUint8List();
+    final original = img.decodeImage(bytes);
+    if (original == null) throw Exception('Failed to decode image');
+
+    final width = GetSystemMetrics(SM_CXSCREEN);
+    final height = GetSystemMetrics(SM_CYSCREEN);
+    final scale = max(width / original.width, height / original.height);
+
+    final resized = img.copyResize(
+      original,
+      width: (original.width * scale).round(),
+      height: (original.height * scale).round(),
+    );
+
+    final file = File('${Directory.systemTemp.path}/temp_wallpaper.jpg');
+    await file.writeAsBytes(img.encodeJpg(resized, quality: 95));
+    return file.path;
+  }
+
+  Future<void> _setWallpaper(String assetPath) async {
+    if (!Platform.isWindows) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Wallpaper setting only supported on Windows.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    try {
+      final path = await _prepareWallpaper(assetPath);
+      final pathPtr = path.toNativeUtf16();
+      final result = _systemParametersInfo(
+        20, // SPI_SETDESKWALLPAPER
+        0,
+        pathPtr,
+        0x01 | 0x02, // SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+      );
+      calloc.free(pathPtr);
+
+      if (!result) {
+        final errorCode = GetLastError();
+        throw Exception('Failed to set wallpaper (Error $errorCode)');
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Wallpaper applied successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to set wallpaper: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  // ------------------------------------------------------
 
   @override
   Widget build(BuildContext context) {
@@ -101,7 +196,7 @@ class _WallpaperStudioPageState extends ConsumerState<WallpaperStudioPage> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Left Grid
+                      // Left Grid (unchanged)
                       Expanded(
                         flex: 3,
                         child: Padding(
@@ -211,7 +306,7 @@ class _WallpaperStudioPageState extends ConsumerState<WallpaperStudioPage> {
                         ),
                       ),
 
-                      // Right Preview
+                      // Right Preview Panel
                       Expanded(
                         flex: 2,
                         child: Container(
@@ -298,9 +393,7 @@ class _WallpaperStudioPageState extends ConsumerState<WallpaperStudioPage> {
                               ),
                               const SizedBox(height: 10),
                               ElevatedButton(
-                                onPressed: () => ref
-                                    .read(previewDrawerProvider.notifier)
-                                    .open(),
+                                onPressed: () => _setWallpaper(selected.image),
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: const Color(0xFFFFB23F),
                                   padding:
@@ -319,8 +412,6 @@ class _WallpaperStudioPageState extends ConsumerState<WallpaperStudioPage> {
                       ),
                     ],
                   ),
-
-                  // Drawer overlay and Animated Drawer remain unchanged...
                 ],
               ),
             ),
