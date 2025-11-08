@@ -1,0 +1,38 @@
+name: practice
+description: A new Flutter project.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.3.6
+  flutter_svg: ^2.2.0
+  google_fonts: ^6.2.1
+
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/nature.png
+    - assets/abstract.jpg
+    - assets/urban.jpg
+    - assets/space.jpg
+    - assets/minimalist.jpg
+    - assets/animal.jpg
+    - assets/nature1.jpg
+    - assets/nature2.jpg
+    - assets/nature3.jpg
+    - assets/nature4.jpg
+    - assets/nature5.jpg
+    - assets/nature6.jpg
